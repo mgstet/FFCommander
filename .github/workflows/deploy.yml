@@ -6,6 +6,9 @@ on:
       - 'v*' # Trigger via `git tag v1.0.0 && git push origin --tags`
   workflow_dispatch: # Allow manual trigger from GitHub UI anytime
 
+permissions:
+  contents: write
+
 jobs:
   build-tauri:
     strategy:
@@ -25,7 +28,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Install Rust Stable
         uses: dtolnay/rust-toolchain@stable
