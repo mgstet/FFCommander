@@ -5,6 +5,8 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile, readTextFile } from "@tauri-apps/plugin-fs";
 import { CommandBlock, parseFfmpegCommand, serializeFfmpegCommand } from "./lib/ffmpegParser";
+import { AiAssistant } from "./components/AiAssistant";
+import { SettingsModal } from "./components/SettingsModal";
 import "./App.css";
 
 interface ProgressPayload { job_id: string; line: string; success?: boolean; }
@@ -44,6 +46,12 @@ function App() {
   const [batchMode, setBatchMode] = useState<'original' | 'destination'>('original');
   const [batchSuffix, setBatchSuffix] = useState('_encoded');
   const [batchDestFolder, setBatchDestFolder] = useState('');
+
+  // Setting Modal
+  const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
+
+  // AI Explainer State
+  const [showAiExplainer, setShowAiExplainer] = useState<boolean>(false);
 
   // Presets State
   const [presets, setPresets] = useState<Preset[]>(() => {
@@ -200,8 +208,38 @@ function App() {
      });
   }, [blocks, ghostProbeMap]);
 
+  // Native Keydown Delete Block Workflow
+  useEffect(() => {
+     const handleKeyDown = (e: KeyboardEvent) => {
+         const activeTags = ['INPUT', 'TEXTAREA'];
+         if (e.key === 'Delete' && selectedBlockId && !activeTags.includes(document.activeElement?.tagName || '')) {
+             const newBlocks = blocks.filter(b => b.id !== selectedBlockId);
+             setBlocks(newBlocks);
+             setRawCommand(serializeFfmpegCommand(newBlocks));
+             setSelectedBlockId(null);
+         }
+     };
+     window.addEventListener('keydown', handleKeyDown);
+     return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedBlockId, blocks]);
+
   const syncBlocks = (newBlocks: CommandBlock[]) => { setBlocks(newBlocks); setRawCommand(serializeFfmpegCommand(newBlocks)); };
+  
   const handleRawChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => { setRawCommand(e.target.value); setBlocks(parseFfmpegCommand(e.target.value)); setSelectedBlockId(null); };
+  
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+     e.preventDefault();
+     const pastedText = e.clipboardData.getData('text');
+     const sanitized = pastedText.replace(/\\\s*\n\s*/g, ' ').replace(/\n\s*/g, ' ');
+     
+     const start = e.currentTarget.selectionStart;
+     const end = e.currentTarget.selectionEnd;
+     const newStr = rawCommand.substring(0, start) + sanitized + rawCommand.substring(end);
+     
+     setRawCommand(newStr);
+     setBlocks(parseFfmpegCommand(newStr));
+     setSelectedBlockId(null);
+  };
 
   const handleInteractiveBlockClick = async (block: CommandBlock) => {
      if (block.flag === '-i') {
@@ -331,26 +369,30 @@ function App() {
       <div className="top-bar">
          <h1>FFCommander</h1>
          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-            <select value={selectedPresetId} onChange={(e) => { const p = presets.find(x => x.id === e.target.value); if (p) { setRawCommand(p.command); setBlocks(parseFfmpegCommand(p.command)); setSelectedPresetId(p.id); } }} style={{ padding: '0.5rem', backgroundColor: 'var(--bg-secondary)', color: 'white', border: '1px solid var(--border-subtle)', borderRadius: '6px' }}>
-               <option value="">-- Quick Load Preset --</option>
-               {presets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            <select value={selectedPresetId} onChange={(e) => { const p = presets.find(x => x.id === e.target.value); if (p) { setRawCommand(p.command); setBlocks(parseFfmpegCommand(p.command)); setSelectedPresetId(p.id); } }} style={{ padding: '0.5rem', backgroundColor: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-subtle)', borderRadius: '6px', outline: 'none' }}>
+               <option style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-primary)' }} value="">-- Quick Load Preset --</option>
+               {presets.map(p => <option style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-primary)' }} key={p.id} value={p.id}>{p.name}</option>)}
             </select>
             <button onClick={() => setShowPresetManager(true)} style={{ padding: '0.5rem 1rem', fontSize: '0.85rem', backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border-focus)', color: 'var(--text-primary)' }}>⚙ Manage Presets...</button>
+            <button onClick={() => setShowSettingsModal(true)} style={{ padding: '0.4rem 0.8rem', fontSize: '1.2rem', backgroundColor: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>⚙️</button>
          </div>
       </div>
 
       <div className="main-scroll-area">
         <section>
-           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h2>1. The Command Dissector</h2>
+           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                 <h2 style={{ margin: 0 }}>1. The Command Dissector</h2>
+                 <button onClick={() => setShowAiExplainer(true)} style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem', backgroundColor: 'var(--accent-purple)' }}>✨ AI Assistant</button>
+              </div>
               <div style={{ display: 'flex', gap: '1rem' }}>
-                <button onClick={handleSelectBatch} style={{ padding: '0.4rem 1rem', fontSize: '0.9rem', backgroundColor: 'var(--accent-blue)' }}>+ Add Batch to Queue...</button>
-                <button onClick={handlePushToQueue} style={{ padding: '0.4rem 1rem', fontSize: '0.9rem' }}>+ Add Single Job</button>
+                 <button onClick={handleSelectBatch} style={{ padding: '0.4rem 1rem', fontSize: '0.9rem', backgroundColor: 'var(--accent-blue)' }}>+ Add Batch to Queue...</button>
+                 <button onClick={handlePushToQueue} style={{ padding: '0.4rem 1rem', fontSize: '0.9rem' }}>+ Add Single Job</button>
               </div>
            </div>
            <div className="dissector-container">
              <div>
-                 <div className="raw-input-wrapper"><textarea value={rawCommand} onChange={handleRawChange} placeholder="Paste raw FFmpeg command here..." /></div>
+                 <div className="raw-input-wrapper"><textarea value={rawCommand} onChange={handleRawChange} onPaste={handlePaste} placeholder="Paste raw FFmpeg command here..." /></div>
                  <div className="visual-blocks">
                    {blocks.map((b) => (
                      <div 
@@ -378,6 +420,7 @@ function App() {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem' }}>
                      <div><label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Flag</label><input type="text" value={selectedBlock.flag} onChange={(e) => syncBlocks(blocks.map(b => b.id === selectedBlock.id ? { ...b, flag: e.target.value } : b))} /></div>
                      <div><label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Value</label><input type="text" value={selectedBlock.value} onChange={(e) => syncBlocks(blocks.map(b => b.id === selectedBlock.id ? { ...b, value: e.target.value } : b))} /></div>
+
                   </div>
                ) : (<p style={{ marginTop: '1rem', color: 'var(--text-secondary)' }}>Select a flag block iteratively edit it.</p>)}
                <p style={{ color: 'var(--accent-green)', fontSize: '0.8rem', marginTop: '2rem' }}>💡 Tip: <b>Drag & Drop</b> a sequence or video directly onto an <b>-i</b> block to effortlessly map absolute Paths!</p>
@@ -552,6 +595,22 @@ function App() {
           </div>
         </div>
       )}
+
+
+      {showAiExplainer && (
+         <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', zIndex: 9999, backgroundColor: 'var(--bg-primary)' }}>
+            <AiAssistant 
+              initialCommand={rawCommand} 
+              onClose={() => setShowAiExplainer(false)} 
+              onInject={(generatedCommandText) => {
+                 setRawCommand(generatedCommandText);
+                 setBlocks(parseFfmpegCommand(generatedCommandText));
+                 setShowAiExplainer(false);
+              }}
+            />
+         </div>
+      )}
+      {showSettingsModal && <SettingsModal onClose={() => setShowSettingsModal(false)} />}
     </>
   );
 }

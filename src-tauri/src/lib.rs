@@ -174,6 +174,26 @@ fn probe_file(path: String) -> Result<String, String> {
     }
 }
 
+#[tauri::command]
+fn get_ffmpeg_version() -> String {
+    #[cfg(target_os = "windows")]
+    use std::os::windows::process::CommandExt;
+
+    let mut cmd = Command::new("ffmpeg");
+    cmd.arg("-version");
+
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+    match cmd.output() {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            stdout.lines().next().unwrap_or("FFmpeg Version Unknown").to_string()
+        },
+        Err(_) => "FFmpeg Not Found".to_string()
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -185,9 +205,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             check_ffmpeg_path,
+            get_ffmpeg_version,
+            probe_file,
             enqueue_job,
-            cancel_job,
-            probe_file
+            cancel_job
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
