@@ -30,14 +30,19 @@ const FLAG_MAP: Record<string, CommandBlock['type']> = {
 const generateId = () => Math.random().toString(36).substring(2, 9);
 
 export function parseFfmpegCommand(command: string): CommandBlock[] {
+  // Sanitize: Strip trailing backslashes masking newlines, and general newlines from copy-pasting
+  const sanitized = command.replace(/\\\r?\n/g, ' ').replace(/\r?\n/g, ' ').trim();
+  
   // Regex to split by spaces but preserve strings in quotes
   const regex = /(?:[^\s"']+|"[^"]*"|'[^']*')+/g;
-  const tokens = command.match(regex) || [];
+  const rawTokens = sanitized.match(regex) || [];
+  
+  // Automatically unquote token boundaries safely
+  const tokens = rawTokens.map(t => t.replace(/^["'](.*)["']$/, '$1'));
   
   const blocks: CommandBlock[] = [];
   let i = 0;
 
-  // Let's strip out 'ffmpeg' if it's at the start.
   if (tokens[0] === 'ffmpeg') {
     i++;
   }
@@ -45,11 +50,9 @@ export function parseFfmpegCommand(command: string): CommandBlock[] {
   while (i < tokens.length) {
     const token = tokens[i];
     
-    // If it's a flag
     if (token.startsWith('-')) {
       const type = FLAG_MAP[token] || 'custom';
       
-      // Lookahead: does the next token exist and is it NOT a flag?
       if (i + 1 < tokens.length && !tokens[i+1].startsWith('-')) {
         blocks.push({
           id: generateId(),
@@ -59,7 +62,6 @@ export function parseFfmpegCommand(command: string): CommandBlock[] {
         });
         i += 2;
       } else {
-        // Flag with no value
         blocks.push({
           id: generateId(),
           type,
@@ -69,7 +71,6 @@ export function parseFfmpegCommand(command: string): CommandBlock[] {
         i++;
       }
     } else {
-      // It's a standalone value (usually output file)
       blocks.push({
         id: generateId(),
         type: 'output',
@@ -91,7 +92,11 @@ export function serializeFfmpegCommand(blocks: CommandBlock[]): string {
       parts.push(block.flag);
     }
     if (block.value) {
-      parts.push(block.value);
+      if (block.value.includes(' ') && !/^["'].*["']$/.test(block.value)) {
+        parts.push(`"${block.value}"`);
+      } else {
+        parts.push(block.value);
+      }
     }
   }
   

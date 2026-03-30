@@ -5,14 +5,24 @@ use std::sync::Mutex;
 use std::thread;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 struct AppState {
     children: Mutex<HashMap<String, std::process::Child>>,
 }
 
 #[tauri::command]
 fn check_ffmpeg_path() -> bool {
-    let output = Command::new("ffmpeg").arg("-version").output();
-    match output {
+    let mut cmd = Command::new("ffmpeg");
+    cmd.arg("-version");
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    match cmd.output() {
         Ok(out) => out.status.success(),
         Err(_) => false,
     }
@@ -22,6 +32,7 @@ fn check_ffmpeg_path() -> bool {
 struct ProgressPayload {
     job_id: String,
     line: String,
+    success: Option<bool>,
 }
 
 #[tauri::command]
@@ -42,8 +53,12 @@ fn enqueue_job(
     job_id: String,
     args: Vec<String>,
 ) -> Result<(), String> {
-    let mut child = Command::new("ffmpeg")
-        .args(args)
+    let mut cmd = Command::new("ffmpeg");
+    cmd.args(args);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    let mut child = cmd
         .stderr(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -59,13 +74,13 @@ fn enqueue_job(
             ProgressPayload {
                 job_id: job_id_clone.clone(),
                 line: "Job started...".to_string(),
+                success: None,
             },
         );
 
         let reader = BufReader::new(stderr);
         let mut line_buffer = Vec::new();
 
-        // Iterate byte-by-byte through the buffer to detect both \n and \r live
         for byte_result in reader.bytes() {
             if let Ok(c) = byte_result {
                 if c == b'\n' || c == b'\r' {
@@ -76,6 +91,7 @@ fn enqueue_job(
                             ProgressPayload {
                                 job_id: job_id_clone.clone(),
                                 line: line_str,
+                                success: None,
                             },
                         );
                     }
@@ -88,7 +104,6 @@ fn enqueue_job(
             }
         }
 
-        // Flush remaining
         if !line_buffer.is_empty() {
             let line_str = String::from_utf8_lossy(&line_buffer).to_string();
             let _ = app.emit(
@@ -96,17 +111,20 @@ fn enqueue_job(
                 ProgressPayload {
                     job_id: job_id_clone.clone(),
                     line: line_str,
+                    success: None,
                 },
             );
         }
 
         let state = app.state::<AppState>();
         let mut status_msg = String::from("Completed");
+        let mut job_success = false;
 
         if let Ok(mut children) = state.children.lock() {
             if let Some(mut c) = children.remove(&job_id_clone) {
                 if let Ok(status) = c.wait() {
                     status_msg = format!("Finished with status: {}", status);
+                    job_success = status.success();
                 } else {
                     status_msg = String::from("Job Killed / Failed to wait");
                 }
@@ -120,6 +138,7 @@ fn enqueue_job(
             ProgressPayload {
                 job_id: job_id_clone,
                 line: status_msg,
+                success: Some(job_success),
             },
         );
     });
@@ -129,16 +148,20 @@ fn enqueue_job(
 
 #[tauri::command]
 fn probe_file(path: String) -> Result<String, String> {
-    let output = Command::new("ffprobe")
-        .args([
-            "-v",
-            "quiet",
-            "-print_format",
-            "json",
-            "-show_format",
-            "-show_streams",
-            &path,
-        ])
+    let mut cmd = Command::new("ffprobe");
+    cmd.args([
+        "-v",
+        "quiet",
+        "-print_format",
+        "json",
+        "-show_format",
+        "-show_streams",
+        &path,
+    ]);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    let output = cmd
         .output()
         .map_err(|e| format!("Failed to spawn ffprobe: {}", e))?;
 

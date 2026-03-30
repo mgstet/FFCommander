@@ -7,7 +7,7 @@ import { writeTextFile, readTextFile } from "@tauri-apps/plugin-fs";
 import { CommandBlock, parseFfmpegCommand, serializeFfmpegCommand } from "./lib/ffmpegParser";
 import "./App.css";
 
-interface ProgressPayload { job_id: string; line: string; }
+interface ProgressPayload { job_id: string; line: string; success?: boolean; }
 interface FfprobeData {
   format?: { filename: string; duration: string; size: string; bit_rate: string; };
   streams?: Array<{ codec_type: string; codec_name: string; width?: number; height?: number; r_frame_rate?: string; sample_rate?: string; sample_aspect_ratio?: string; field_order?: string; bit_rate?: string; bits_per_raw_sample?: string; bits_per_sample?: string; }>;
@@ -143,7 +143,7 @@ function App() {
        listen<ProgressPayload>("ffmpeg-progress", (e) => {
            setConsoleLogs(prev => [...prev.slice(-49), e.payload.line]);
            if (e.payload.line.includes("time=")) {
-               const match = e.payload.line.match(/time=(\d+):(\d+):(\d+\.\d+)/);
+               const match = e.payload.line.match(/time=\s*(\d+):(\d+):(\d+\.\d+)/);
                if (match) {
                    const currentSecs = parseFloat(match[1]) * 3600 + parseFloat(match[2]) * 60 + parseFloat(match[3]);
                    setJobQueue(prev => prev.map(j => {
@@ -159,8 +159,8 @@ function App() {
            }
        }),
        listen<ProgressPayload>("ffmpeg-complete", (e) => {
-           const finalStatus = e.payload.line.includes("Killed") ? 'cancelled' : (e.payload.line.includes("status: 0") ? 'completed' : 'failed');
-           setJobQueue(prev => prev.map(j => j.id === e.payload.job_id ? { ...j, status: finalStatus, progress: e.payload.line, percent: finalStatus === 'completed' ? 100 : 0 } : j));
+           const finalStatus = e.payload.success === true ? 'completed' : (e.payload.line.includes("Killed") || e.payload.line.includes("Stopped") ? 'cancelled' : 'failed');
+           setJobQueue(prev => prev.map(j => j.id === e.payload.job_id ? { ...j, status: finalStatus, progress: e.payload.line, percent: finalStatus === 'completed' ? 100 : j.percent } : j));
            setConsoleLogs(prev => [...prev.slice(-49), `[${e.payload.job_id}] ${e.payload.line}`]);
        })
     ];
@@ -478,7 +478,7 @@ function App() {
             <div className="modal-content modal-content-large">
                <div className="preset-sidebar">
                    <h3 style={{ padding: '0.5rem', marginTop: '0.5rem', color: 'white' }}>Preset Vault</h3>
-                   <button onClick={() => { setPresetFocusId(null); setPresetDraft({ name: 'New Preset', command: rawCommand, description: '' }); }} style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border-focus)', marginBottom: '1rem' }}>+ Create New</button>
+                   <button onClick={() => { setPresetFocusId(null); const generic = serializeFfmpegCommand(blocks.map(b => b.flag === '-i' ? { ...b, value: 'input_file.mp4' } : (b.type === 'output' && !b.flag ? { ...b, value: 'output_file.mp4' } : b))); setPresetDraft({ name: 'New Preset', command: generic, description: '' }); }} style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border-focus)', marginBottom: '1rem' }}>+ Create New</button>
                    {presets.map(p => (
                        <div key={p.id} className={`preset-list-item ${presetFocusId === p.id ? 'active' : ''}`} onClick={() => { setPresetFocusId(p.id); setPresetDraft({ ...p }); }}>
                           <strong>{p.name}</strong>
@@ -501,7 +501,7 @@ function App() {
                    
                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                        <div>
-                          {presetFocusId && <button onClick={() => { if(confirm('Delete ' + presetDraft.name + '?')) { setPresets(prev => prev.filter(x => x.id !== presetFocusId)); setPresetFocusId(null); setPresetDraft({ name: 'New Preset', command: rawCommand, description: '' }); } }} style={{ backgroundColor: 'transparent', border: '1px solid var(--accent-red)', color: 'var(--accent-red)' }}>Trash Preset</button>}
+                          {presetFocusId && <button onClick={() => { if(confirm('Delete ' + presetDraft.name + '?')) { setPresets(prev => prev.filter(x => x.id !== presetFocusId)); setPresetFocusId(null); const generic = serializeFfmpegCommand(blocks.map(b => b.flag === '-i' ? { ...b, value: 'input_file.mp4' } : (b.type === 'output' && !b.flag ? { ...b, value: 'output_file.mp4' } : b))); setPresetDraft({ name: 'New Preset', command: generic, description: '' }); } }} style={{ backgroundColor: 'transparent', border: '1px solid var(--accent-red)', color: 'var(--accent-red)' }}>Trash Preset</button>}
                        </div>
                        <div style={{ display: 'flex', gap: '1rem' }}>
                           <button onClick={async () => { const p = await save({filters:[{name:'JSON', extensions:['json']}]}); if(p) { await writeTextFile(p, JSON.stringify(presets, null, 2)); alert("Exported!"); } }} style={{ backgroundColor: 'transparent', border: '1px solid var(--border-focus)' }}>Export All</button>
@@ -512,10 +512,11 @@ function App() {
                           <button onClick={() => {
                               if (!presetDraft.name || !presetDraft.command) return alert('Title and Command required!');
                               if (presetFocusId) {
+                                  if (presets.some(p => p.id !== presetFocusId && p.name.toLowerCase() === presetDraft.name!.toLowerCase())) return alert('A preset with this title already exists!');
                                   setPresets(prev => prev.map(p => p.id === presetFocusId ? { ...p, ...presetDraft } as Preset : p));
-                                  // Update the active command if it's currently selected
                                   if (selectedPresetId === presetFocusId) { setRawCommand(presetDraft.command || ''); setBlocks(parseFfmpegCommand(presetDraft.command || '')); }
                               } else {
+                                  if (presets.some(p => p.name.toLowerCase() === presetDraft.name!.toLowerCase())) return alert('A preset with this title already exists!');
                                   setPresets(prev => [...prev, { id: 'p_' + Date.now(), name: presetDraft.name!, description: presetDraft.description || '', command: presetDraft.command! }]);
                               }
                               setShowPresetManager(false);

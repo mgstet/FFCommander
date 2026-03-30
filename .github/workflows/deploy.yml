@@ -59,4 +59,5 @@ jobs:
           releaseBody: "Automated core engine builds for Windows & Linux"
           releaseDraft: true
           prerelease: false
+          includeRelease: true
           args: ${{ matrix.args }}
